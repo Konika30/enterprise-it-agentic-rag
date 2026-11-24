@@ -1,23 +1,61 @@
 import time
-from pinecone import Pinecone , ServerlessSpec
-from langchain_openai import OpenAIEmbeddings
+from pinecone import Pinecone, ServerlessSpec
+from langchain_core.embeddings import Embeddings
 from langchain_pinecone import PineconeVectorStore
 from app.core.config import get_settings
 
 settings = get_settings()
 
-
 _embeddings = None
 _vectorstore = None
-
 
 EMBEDDING_DIMENSIONS = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
     "all-minilm-l6-v2": 384,
+    "multilingual-e5-large": 1024,
+    "llama-text-embed-v2": 1024,
 }
 
+
+def _extract_values(item):
+    if isinstance(item, dict):
+        return item["values"]
+    try:
+        return item["values"]
+    except Exception:
+        return item.values
+
+
+class PineconeInferenceEmbeddings(Embeddings):
+    def __init__(self, api_key: str, model: str):
+        self.pc = Pinecone(api_key=api_key)
+        self.model = model
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors = []
+        for i in range(0, len(texts), 48):
+            batch = texts[i : i + 48]
+            res = self.pc.inference.embed(
+                model=self.model,
+                inputs=batch,
+                parameters={"input_type": "passage", "truncate": "END"},
+            )
+            items = getattr(res, "data", res)
+            vectors.extend(_extract_values(item) for item in items)
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        res = self.pc.inference.embed(
+            model=self.model,
+            inputs=[text],
+            parameters={"input_type": "query", "truncate": "END"},
+        )
+        items = getattr(res, "data", res)
+        return _extract_values(items[0])
 
 
 def get_embedding_dimension(model_name: str | None = None) -> int:
@@ -36,6 +74,8 @@ def get_embedding_dimension(model_name: str | None = None) -> int:
         return 1536
     if "all-minilm" in normalized:
         return 384
+    if "multilingual-e5-large" in normalized or "llama-text-embed-v2" in normalized:
+        return 1024
 
     raise ValueError(
         f"Unsupported embedding model '{model_name or settings.embedding_model}' for Pinecone. "
@@ -43,19 +83,16 @@ def get_embedding_dimension(model_name: str | None = None) -> int:
     )
 
 
-
 def get_embeddings():
     global _embeddings
     if _embeddings is None:
-        if not settings.openai_api_key:
-            raise RuntimeError("OPENAI_API_KEY is missing")
-        _embeddings = OpenAIEmbeddings(
+        if not settings.pinecone_api_key:
+            raise RuntimeError("PINECONE_API_KEY is missing")
+        _embeddings = PineconeInferenceEmbeddings(
+            api_key=settings.pinecone_api_key,
             model=settings.embedding_model,
-            api_key=settings.openai_api_key,
         )
     return _embeddings
-
-
 
 
 def ensure_index():
@@ -90,9 +127,6 @@ def ensure_index():
     return pc.Index(settings.pinecone_index_name)
 
 
-
-
-
 def get_vectorstore():
     global _vectorstore
     if _vectorstore is None:
@@ -105,10 +139,8 @@ def get_vectorstore():
     return _vectorstore
 
 
-
 def get_retriever():
     return get_vectorstore().as_retriever(search_kwargs={"k": settings.top_k})
-
 
 
 def add_documents(chunks):

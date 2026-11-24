@@ -1,4 +1,5 @@
-# Enterprise IT Support Agentic RAG Copilot
+python ingest_sample_kb.py
+python run.py Enterprise IT Support Agentic RAG Copilot
 
 An end-to-end **Forward Deployed Engineer (FDE) project** that turns a notebook-style Agentic RAG workflow into a deployable internal product using **LangGraph, FastAPI, Pinecone, Groq, Tavily, HTML, CSS, and JavaScript**.
 
